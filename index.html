@@ -28,6 +28,8 @@ body{margin:0;font-family:var(--font-body);line-height:1.45;background:var(--bg)
 header{max-width:1180px;margin:0 auto;padding:20px 18px 0;display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}
 header h1{margin:0;font-family:var(--font-num);font-size:1.7rem;font-weight:700;letter-spacing:.01em}
 header p{margin:2px 0 0;color:var(--muted);font-size:15px}
+header>div:first-child{display:grid;grid-template-columns:auto 1fr;column-gap:14px;align-items:center}
+header .logo{grid-row:span 2;height:40px;width:auto;background:#fff;padding:4px 9px;border-radius:6px}
 .btn-ghost{background:transparent;border:1px solid #3a4756;color:#dfe5eb;border-radius:8px;padding:8px 12px;font:inherit;font-size:13px;cursor:pointer}
 .btn-ghost:hover{background:#25313e}
 main{max-width:1180px;margin:0 auto;padding:22px 18px 40px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
@@ -150,6 +152,7 @@ button,input,select{color:inherit}
 <div class="loading" id="loading">Chargement des références…</div>
 <header>
   <div>
+    <img class="logo" src="LogoLyonevents_EurexpoLyon_TexteNoir_RVB.png" alt="GL events Lyon · Eurexpo Lyon">
     <h1>Calculateur de descente de charges</h1>
     <p>Eurexpo Lyon · charge par point d'appui ramenée au m² de plaque, comparée à la limite admissible du sol</p>
   </div>
