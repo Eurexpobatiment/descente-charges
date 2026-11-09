@@ -309,7 +309,7 @@ button,input,select{color:inherit}
    Références : DcConfig/refs (plaques et emplacements, modifiables par le Bâtiment avec le code d'accès).
    Historique : collection DcHistorique (un document par calcul enregistré).
    Lecture libre ; écriture après connexion anonyme (automatique, sans compte).
-   Le rapport PDF est toujours fabriqué par le script Google à partir des données envoyées (rien dans Drive). */
+   Le rapport PDF est fabriqué dans la page (jsPDF) : plus aucun script Google. */
 const FIREBASE = {
   apiKey: "AIzaSyARtP0RMkulG6c53-bnazwpGTspl0LgAhk", // clé publique (faite pour être dans la page)
   authDomain: "equipe-batiment.firebaseapp.com",
@@ -319,7 +319,6 @@ const FIREBASE = {
   appId: "1:408022301135:web:69dee0a5fb479154657aba"
 };
 const FBV = "10.14.1";
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxjnGQedjXX3OqHG7GnXDIDQQHWVjZq3j_Ta2wQdJeqUc2RPbsXTthPY17YF_0RqdnxRA/exec";
 // Valeurs du classeur « Calculateur Descente de Charges » (secours si Firebase n'a pas encore de références)
 const DEFAUT = {
   plaques:[{ref:"KSI P15x15",dim:"1,5 m x 1,5 m",surf:2.25,poids:460},{ref:"KSI P20x20",dim:"2 m x 2 m",surf:4,poids:980},
@@ -355,14 +354,6 @@ function fbErr(e) {
 async function ensureAuth() {
   await auth.authStateReady();
   if (!auth.currentUser) await withTimeout(A.signInAnonymously(auth), 15000, 'Pas de connexion : le premier enregistrement sur cet appareil demande internet.');
-}
-async function script(fn, arg) {
-  if (navigator.onLine === false) throw new Error("Pas de connexion : le rapport PDF demande internet.");
-  let r;
-  try { r = await fetch(SCRIPT_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ fn: fn, arg: arg }) }).then(x => x.json()); }
-  catch (e) { throw new Error("Connexion au script Google impossible (" + (e && e.message || e) + ")"); }
-  if (!r || r.error) throw new Error(r && r.error || "Réponse invalide du script Google");
-  return r.result;
 }
 let tt; function toast(m){ const t=document.getElementById("toast"); t.textContent=m; t.classList.add("on"); clearTimeout(tt); tt=setTimeout(()=>t.classList.remove("on"),2600); }
 
@@ -495,26 +486,110 @@ $("cmp").addEventListener("click",e=>{const b=e.target.closest("[data-p]");if(b)
 $("dateP").value=new Date().toISOString().slice(0,10);
 $("piedL").oninput=$("piedl").oninput=()=>{const L=parseFloat($("piedL").value),l=parseFloat($("piedl").value); if(L>0&&l>0){pied={L:L,l:l};renderChoices();render();}};
 
-// Rapport PDF : fabriqué par le script Google à partir des données envoyées, puis téléchargé (rien dans Drive)
-function genPdf(){
+// Rapport PDF : fabriqué directement dans la page (jsPDF), puis téléchargé. Plus aucun appel au script Google.
+const JSPDF_URL = "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm";
+let jspdfP = null;
+const chargerJsPDF = () => (jspdfP = jspdfP || import(JSPDF_URL).then(m => m.jsPDF || (m.default && m.default.jsPDF)).catch(e => { jspdfP = null; throw new Error("Module PDF non chargé (connexion ?)"); }));
+async function imageData(url){
+  const blob = await fetch(url).then(r => { if(!r.ok) throw new Error(url); return r.blob(); });
+  const data = await new Promise((ok, ko) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = ko; fr.readAsDataURL(blob); });
+  const dim = await new Promise((ok, ko) => { const im = new Image(); im.onload = () => ok({ w: im.naturalWidth, h: im.naturalHeight }); im.onerror = ko; im.src = data; });
+  return Object.assign({ data }, dim);
+}
+// texte compatible avec les polices standard du PDF (espaces fines insécables → espaces normales)
+const pt = s => String(s == null ? "" : s).replace(/[  ]/g, " ").replace(/[“”]/g, '"').replace(/[’]/g, "'");
+const nb = (n, d = 0) => pt(fmt(n, d));
+async function genPdf(telecharger = true){
   if(!last) return;
   const b=$("pdfBtn"), L=last; b.disabled=true; $("saveMsg").textContent="Génération du rapport PDF…";
-  script("genererRapport",{projet:$("projet").value, dateProjet:$("dateP").value, libelle:$("libelle").value,
-      poids:state.poids, appuis:state.appuis, lieu:L.lieu.nom, limite:L.lieu.lim,
-      plaque:L.p.ref, dimPlaque:L.p.dim, sansPlaque:!!L.p.none, surface:L.p.surf, poidsPlaque:L.p.poids,
-      parAppui:L.r.parAppui, chargeAppui:L.r.charge, total:L.r.total, taux:L.r.taux, st:L.st,
-      verdict:$("verdict").querySelector(".vt").textContent, reco:$("reco").textContent,
-      rows:L.all.map(a=>({ref:a.p.ref, dim:a.p.dim, surf:a.p.surf, poids:a.p.poids, total:a.r.total, nmin:isFinite(a.r.nmin)?a.r.nmin:null, st:statusOf(a.r.taux)}))})
-    .then(res=>{
-      b.disabled=false;
-      const bin=atob(res.b64), u8=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u8[i]=bin.charCodeAt(i);
-      const url=URL.createObjectURL(new Blob([u8],{type:"application/pdf"}));
-      const a=document.createElement("a"); a.href=url; a.download=res.name; document.body.appendChild(a); a.click(); a.remove();
-      $("saveMsg").innerHTML='✓ Rapport prêt. Si le téléchargement ne démarre pas : <a href="'+url+'" download="'+esc(res.name)+'" target="_blank">'+esc(res.name)+'</a>';
-    })
-    .catch(e=>{b.disabled=false;$("saveMsg").textContent="Erreur : "+e.message;});
+  try{
+    const [jsPDF, logo, plan] = await Promise.all([chargerJsPDF(),
+      imageData("LogoLyonevents_EurexpoLyon_TexteNoir_RVB.png").catch(()=>null), imageData("plan-sous-sol.png").catch(()=>null)]);
+    const doc = new jsPDF({ unit:"mm", format:"a4" });
+    const W = 210, M = 16, CW = W - 2*M;
+    const C = { ink:[24,33,43], muted:[93,107,120], line:[213,220,227], soft:[244,246,248], accent:[31,95,139],
+      ok:[45,122,90], okS:[226,242,234], warn:[176,120,0], warnS:[251,241,217], bad:[196,82,29], badS:[251,233,223] };
+    const col = (c, f) => f ? doc.setFillColor(...c) : doc.setTextColor(...c);
+    const projet = $("projet").value.trim(), libelle = $("libelle").value.trim(), dP = $("dateP").value;
+    const dFr = dP ? dP.split("-").reverse().join("/") : "";
+    let y = M;
+    // En-tête
+    if(logo){ const h = 14, w = h * logo.w / logo.h; doc.addImage(logo.data, "PNG", M, y, w, h); }
+    doc.setFont("helvetica","bold"); doc.setFontSize(17); col(C.ink); doc.text("Rapport de descente de charges", W - M, y + 6, { align:"right" });
+    doc.setFont("helvetica","normal"); doc.setFontSize(9.5); col(C.muted); doc.text(pt("Eurexpo – charge par point d'appui ramenée au m²"), W - M, y + 11.5, { align:"right" });
+    y += 20; doc.setDrawColor(...C.line); doc.setLineWidth(0.4); doc.line(M, y, W - M, y); y += 8;
+    doc.setFont("helvetica","bold"); doc.setFontSize(13); col(C.ink); doc.text(pt(projet || "Projet sans nom"), M, y);
+    if(dFr){ doc.setFont("helvetica","normal"); doc.setFontSize(11); col(C.muted); doc.text(dFr, W - M, y, { align:"right" }); }
+    y += 6;
+    if(libelle){ doc.setFontSize(10); col(C.muted); doc.text(pt("Équipement / repère : "), M, y); const x = M + doc.getTextWidth(pt("Équipement / repère : ")); col(C.ink); doc.text(pt(libelle), x, y); y += 4; }
+    y += 5;
+    const titre = t => { doc.setFont("helvetica","bold"); doc.setFontSize(9); col(C.muted); doc.text(pt(t.toUpperCase()), M, y); y += 2.5; doc.setDrawColor(...C.line); doc.line(M, y, W - M, y); y += 5.5; };
+    const ligne = (k, v) => { doc.setFont("helvetica","normal"); doc.setFontSize(10.5); col(C.muted); doc.text(pt(k), M, y); doc.setFont("helvetica","bold"); col(C.ink); doc.text(pt(v), W - M, y, { align:"right" }); y += 6.5; };
+    // Données d'entrée
+    titre("Données d'entrée");
+    ligne("Poids de l'équipement", nb(state.poids) + " kg");
+    ligne("Nombre de points d'appui", String(state.appuis));
+    ligne("Poids par point d'appui sans plaque", nb(L.r.parAppui) + " kg");
+    ligne("Emplacement", L.lieu.nom + " (limite " + nb(L.lieu.lim) + " kg/m²)");
+    ligne("Plaque de répartition", L.p.none ? "Sans plaque (pied " + pied.L + " × " + pied.l + " cm)" : L.p.ref + " (" + L.p.dim + ")");
+    ligne("Surface d'appui / poids plaque", nb(L.p.surf, 2) + " m² / " + nb(L.p.poids) + " kg");
+    y += 3;
+    // Résultat
+    titre("Résultat");
+    const st = L.st, fg = C[st], bg = C[st + "S"];
+    col(bg, true); doc.roundedRect(M, y, CW, 24, 3, 3, "F");
+    doc.setFont("helvetica","bold"); doc.setFontSize(13); col(fg); doc.text(pt($("verdict").querySelector(".vt").textContent), M + 6, y + 9);
+    doc.setFont("helvetica","normal"); doc.setFontSize(9.5); col(C.ink); doc.text(pt($("verdict").querySelector(".vs").textContent), M + 6, y + 15.5, { maxWidth: CW - 70 });
+    doc.setFont("helvetica","bold"); doc.setFontSize(22); col(fg); doc.text(nb(L.r.total), W - M - 22, y + 11, { align:"right" });
+    doc.setFontSize(10); doc.text("kg/m²", W - M - 6, y + 11, { align:"right" });
+    doc.setFont("helvetica","normal"); doc.setFontSize(9); col(C.muted); doc.text(pt("limite " + nb(L.lieu.lim) + " kg/m² – taux " + nb(L.r.taux * 100) + " %"), W - M - 6, y + 18, { align:"right" });
+    y += 31;
+    // jauge
+    const gmax = Math.max(L.lieu.lim * 1.5, L.r.total * 1.05);
+    col(C.line, true); doc.roundedRect(M, y, CW, 3.5, 1.7, 1.7, "F");
+    col(fg, true); doc.roundedRect(M, y, Math.max(3.5, CW * Math.min(1, L.r.total / gmax)), 3.5, 1.7, 1.7, "F");
+    const xm = M + CW * L.lieu.lim / gmax; doc.setDrawColor(...C.ink); doc.setLineWidth(0.6); doc.line(xm, y - 1.5, xm, y + 5);
+    doc.setFontSize(7.5); col(C.muted); doc.text("Limite", xm, y - 2.5, { align:"center" }); y += 11;
+    doc.setFontSize(10); col(C.ink);
+    doc.text(pt("Calcul : (" + nb(state.poids) + " kg ÷ " + state.appuis + " appuis + " + nb(L.p.poids) + " kg) ÷ " + nb(L.p.surf, 2) + " m² = " + nb(L.r.total) + " kg/m²"), M, y); y += 7;
+    const reco = doc.splitTextToSize(pt($("reco").textContent), CW - 8);
+    doc.setDrawColor(...C.line); doc.setLineDashPattern([1.2, 1], 0); doc.roundedRect(M, y, CW, reco.length * 5 + 6, 2, 2, "S"); doc.setLineDashPattern([], 0);
+    doc.text(reco, M + 4, y + 6); y += reco.length * 5 + 13;
+    // Comparatif
+    titre("Comparatif des solutions");
+    const cols = [{ t:"Plaque", w:44 }, { t:"Surface", w:22, r:1 }, { t:"Poids", w:22, r:1 }, { t:"kg/m²", w:30, r:1 }, { t:"Appuis mini", w:30, r:1 }, { t:"Statut", w:30, r:1 }];
+    const cell = (txt, i, yy) => { let x = M; for(let k = 0; k < i; k++) x += cols[k].w; if(cols[i].r) doc.text(txt, x + cols[i].w - 2, yy, { align:"right" }); else doc.text(txt, x + 2, yy); };
+    doc.setFont("helvetica","bold"); doc.setFontSize(8.5); col(C.muted); cols.forEach((c, i) => cell(c.t.toUpperCase(), i, y)); y += 2.5;
+    doc.setDrawColor(...C.line); doc.setLineWidth(0.3); doc.line(M, y, W - M, y); y += 5;
+    L.all.forEach(a => {
+      const s = statusOf(a.r.taux), cur = a.p.ref === L.p.ref;
+      if(cur){ col([227,238,246], true); doc.rect(M, y - 4.5, CW, 10.5, "F"); }
+      doc.setFont("helvetica","bold"); doc.setFontSize(10); col(C.ink); cell(pt(a.p.ref), 0, y);
+      doc.setFont("helvetica","normal"); doc.setFontSize(8); col(C.muted); cell(pt(a.p.none ? "pied " + pied.L + " × " + pied.l + " cm" : a.p.dim), 0, y + 4);
+      doc.setFontSize(10); col(C.ink);
+      cell(nb(a.p.surf, 2) + " m²", 1, y); cell(nb(a.p.poids) + " kg", 2, y); cell(nb(a.r.total), 3, y); cell(isFinite(a.r.nmin) ? String(a.r.nmin) : "—", 4, y);
+      doc.setFont("helvetica","bold"); col(C[s]); cell(s === "ok" ? "OK" : s === "warn" ? "Limite" : "Dépassé", 5, y);
+      y += 6.5; doc.setDrawColor(...C.line); doc.line(M, y - 0.5, W - M, y - 0.5); y += 4;
+    });
+    // Page 2 : plan du sous-sol
+    doc.addPage(); y = M;
+    doc.setFont("helvetica","bold"); doc.setFontSize(14); col(C.ink); doc.text(pt("Plan du parc – sous-sol"), M, y + 4); y += 10;
+    if(plan){ const w = CW, h = Math.min(240, w * plan.h / plan.w), ww = h * plan.w / plan.h; doc.addImage(plan.data, "PNG", M + (CW - ww) / 2, y, ww, h); y += h + 6; }
+    doc.setFont("helvetica","normal"); doc.setFontSize(9.5); col(C.muted); doc.text(pt("Traits bleus : caniveaux – traits noirs doubles : galeries techniques."), M, y); 
+    const now = new Date(), gen = now.toLocaleDateString("fr-FR") + " " + now.toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" });
+    doc.setFontSize(8); doc.text(pt("Rapport généré le " + gen + " par le calculateur de descente de charges."), M, 297 - 10);
+    const name = "Descente de charges - " + (projet || "projet").replace(/[\\/:*?"<>|]/g, "-") + " - " + (dFr ? dFr.replace(/\//g, "-") : now.toLocaleDateString("fr-FR").replace(/\//g, "-")) + ".pdf";
+    const blob = doc.output("blob");
+    if(!telecharger){ b.disabled=false; $("saveMsg").textContent=""; return { blob, name }; }
+    const url = URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+    $("saveMsg").innerHTML='✓ Rapport prêt. Si le téléchargement ne démarre pas : <a href="'+url+'" download="'+esc(name)+'" target="_blank">'+esc(name)+'</a>';
+  }catch(e){ $("saveMsg").textContent="Erreur : "+e.message; }
+  b.disabled=false;
 }
 $("pdfBtn").onclick=()=>genPdf();
+window.dcRapportPdf = () => genPdf(false); // contrôle : fabrique le PDF sans le télécharger
+$("pdfBtn").addEventListener("mouseenter",()=>chargerJsPDF().catch(()=>{}),{once:true});
 
 // Enregistrement dans Firebase (collection DcHistorique)
 $("saveCalc").onclick=async()=>{
