@@ -1,0 +1,26 @@
+    // ===================== Appli Descente de charges =====================
+    // Bloc à coller dans les règles Firestore du projet equipe-batiment, JUSTE AVANT les deux
+    // dernières accolades « } » de la fin (à l'intérieur de « match /databases/{db}/documents { »).
+    // Pas de compte : l'appli se connecte toute seule en anonyme pour écrire.
+
+    // Plaques et emplacements (modifiés depuis l'appli par le Bâtiment, avec le code d'accès)
+    match /DcConfig/{id} {
+      allow read: if true;
+      allow write: if request.auth != null && id == 'refs'
+        && request.resource.data.keys().hasOnly(['plaques', 'lieux', 'maj'])
+        && request.resource.data.plaques is list && request.resource.data.plaques.size() <= 40
+        && request.resource.data.lieux is list && request.resource.data.lieux.size() <= 40;
+    }
+
+    // Historique : un document par calcul enregistré (pas de modification ni de suppression depuis l'appli)
+    match /DcHistorique/{id} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['projet', 'dateProjet', 'libelle', 'poids', 'appuis', 'lieu', 'limite',
+             'plaque', 'dimPlaque', 'sansPlaque', 'surface', 'poidsPlaque', 'chargeAppui', 'total', 'taux', 'statut', 'date'])
+        && request.resource.data.date == request.time
+        && request.resource.data.projet is string && request.resource.data.projet.size() <= 200
+        && request.resource.data.libelle is string && request.resource.data.libelle.size() <= 300;
+      allow update, delete: if false;
+    }
+    // ===================== fin Descente de charges =====================
