@@ -490,11 +490,13 @@ $("piedL").oninput=$("piedl").oninput=()=>{const L=parseFloat($("piedL").value),
 const JSPDF_URL = "https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm";
 let jspdfP = null;
 const chargerJsPDF = () => (jspdfP = jspdfP || import(JSPDF_URL).then(m => m.jsPDF || (m.default && m.default.jsPDF)).catch(e => { jspdfP = null; throw new Error("Module PDF non chargé (connexion ?)"); }));
-async function imageData(url){
-  const blob = await fetch(url).then(r => { if(!r.ok) throw new Error(url); return r.blob(); });
-  const data = await new Promise((ok, ko) => { const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.onerror = ko; fr.readAsDataURL(blob); });
-  const dim = await new Promise((ok, ko) => { const im = new Image(); im.onload = () => ok({ w: im.naturalWidth, h: im.naturalHeight }); im.onerror = ko; im.src = data; });
-  return Object.assign({ data }, dim);
+// image du site → JPEG compressé (fond blanc, largeur limitée) pour garder un PDF léger
+async function imageData(url, maxW){
+  const im = await new Promise((ok, ko) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => ko(new Error(url)); i.src = url; });
+  const k = Math.min(1, maxW / im.naturalWidth), w = Math.round(im.naturalWidth * k), h = Math.round(im.naturalHeight * k);
+  const c = document.createElement("canvas"); c.width = w; c.height = h;
+  const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, w, h); g.drawImage(im, 0, 0, w, h);
+  return { data: c.toDataURL("image/jpeg", 0.85), w, h };
 }
 // texte compatible avec les polices standard du PDF (espaces fines insécables → espaces normales)
 const pt = s => String(s == null ? "" : s).replace(/[  ]/g, " ").replace(/[“”]/g, '"').replace(/[’]/g, "'");
@@ -504,7 +506,7 @@ async function genPdf(telecharger = true){
   const b=$("pdfBtn"), L=last; b.disabled=true; $("saveMsg").textContent="Génération du rapport PDF…";
   try{
     const [jsPDF, logo, plan] = await Promise.all([chargerJsPDF(),
-      imageData("LogoLyonevents_EurexpoLyon_TexteNoir_RVB.png").catch(()=>null), imageData("plan-sous-sol.png").catch(()=>null)]);
+      imageData("LogoLyonevents_EurexpoLyon_TexteNoir_RVB.png", 600).catch(()=>null), imageData("plan-sous-sol.png", 2600).catch(()=>null)]);
     const doc = new jsPDF({ unit:"mm", format:"a4" });
     const W = 210, M = 16, CW = W - 2*M;
     const C = { ink:[24,33,43], muted:[93,107,120], line:[213,220,227], soft:[244,246,248], accent:[31,95,139],
@@ -514,10 +516,10 @@ async function genPdf(telecharger = true){
     const dFr = dP ? dP.split("-").reverse().join("/") : "";
     let y = M;
     // En-tête
-    if(logo){ const h = 14, w = h * logo.w / logo.h; doc.addImage(logo.data, "PNG", M, y, w, h); }
-    doc.setFont("helvetica","bold"); doc.setFontSize(17); col(C.ink); doc.text("Rapport de descente de charges", W - M, y + 6, { align:"right" });
-    doc.setFont("helvetica","normal"); doc.setFontSize(9.5); col(C.muted); doc.text(pt("Eurexpo – charge par point d'appui ramenée au m²"), W - M, y + 11.5, { align:"right" });
-    y += 20; doc.setDrawColor(...C.line); doc.setLineWidth(0.4); doc.line(M, y, W - M, y); y += 8;
+    if(logo){ const h = 11, w = Math.min(62, h * logo.w / logo.h); doc.addImage(logo.data, "JPEG", M, y, w, w * logo.h / logo.w); }
+    doc.setFont("helvetica","bold"); doc.setFontSize(15); col(C.ink); doc.text("Rapport de descente de charges", W - M, y + 5, { align:"right" });
+    doc.setFont("helvetica","normal"); doc.setFontSize(9.5); col(C.muted); doc.text(pt("Eurexpo – charge par point d'appui ramenée au m²"), W - M, y + 10.5, { align:"right" });
+    y += 17; doc.setDrawColor(...C.line); doc.setLineWidth(0.4); doc.line(M, y, W - M, y); y += 8;
     doc.setFont("helvetica","bold"); doc.setFontSize(13); col(C.ink); doc.text(pt(projet || "Projet sans nom"), M, y);
     if(dFr){ doc.setFont("helvetica","normal"); doc.setFontSize(11); col(C.muted); doc.text(dFr, W - M, y, { align:"right" }); }
     y += 6;
@@ -571,13 +573,14 @@ async function genPdf(telecharger = true){
       doc.setFont("helvetica","bold"); col(C[s]); cell(s === "ok" ? "OK" : s === "warn" ? "Limite" : "Dépassé", 5, y);
       y += 6.5; doc.setDrawColor(...C.line); doc.line(M, y - 0.5, W - M, y - 0.5); y += 4;
     });
-    // Page 2 : plan du sous-sol
-    doc.addPage(); y = M;
+    // Page 2 : plan du sous-sol (paysage)
+    doc.addPage("a4", "landscape"); const PW = 297, PH = 210; y = M;
     doc.setFont("helvetica","bold"); doc.setFontSize(14); col(C.ink); doc.text(pt("Plan du parc – sous-sol"), M, y + 4); y += 10;
-    if(plan){ const w = CW, h = Math.min(240, w * plan.h / plan.w), ww = h * plan.w / plan.h; doc.addImage(plan.data, "PNG", M + (CW - ww) / 2, y, ww, h); y += h + 6; }
-    doc.setFont("helvetica","normal"); doc.setFontSize(9.5); col(C.muted); doc.text(pt("Traits bleus : caniveaux – traits noirs doubles : galeries techniques."), M, y); 
+    if(plan){ const mw = PW - 2*M, mh = PH - y - 22, k = Math.min(mw / plan.w, mh / plan.h), w = plan.w * k, h = plan.h * k;
+      doc.addImage(plan.data, "JPEG", M + (mw - w) / 2, y, w, h); y += h + 6; }
+    doc.setFont("helvetica","normal"); doc.setFontSize(9.5); col(C.muted); doc.text(pt("Traits bleus : caniveaux – traits noirs doubles : galeries techniques."), M, y);
     const now = new Date(), gen = now.toLocaleDateString("fr-FR") + " " + now.toLocaleTimeString("fr-FR", { hour:"2-digit", minute:"2-digit" });
-    doc.setFontSize(8); doc.text(pt("Rapport généré le " + gen + " par le calculateur de descente de charges."), M, 297 - 10);
+    doc.setFontSize(8); doc.text(pt("Rapport généré le " + gen + " par le calculateur de descente de charges."), M, PH - 8);
     const name = "Descente de charges - " + (projet || "projet").replace(/[\\/:*?"<>|]/g, "-") + " - " + (dFr ? dFr.replace(/\//g, "-") : now.toLocaleDateString("fr-FR").replace(/\//g, "-")) + ".pdf";
     const blob = doc.output("blob");
     if(!telecharger){ b.disabled=false; $("saveMsg").textContent=""; return { blob, name }; }
